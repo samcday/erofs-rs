@@ -1,0 +1,23 @@
+[package]
+name = "erofs"
+version = "0.1.0"
+edition = "2024"
+authors = ["Dreamacro"]
+description = "A pure Rust library for reading EROFS (Enhanced Read-Only File System) images"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Dreamacro/erofs-rs"
+keywords = ["erofs", "filesystem", "readonly", "linux"]
+categories = ["filesystem"]
+readme = "../README.md"
+rust-version = "1.88"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = { workspace = true, default-features = true }
+thiserror = { workspace = true }
+binrw = { workspace = true, default-features = true }
+bitflags = { workspace = true }
+memmap2 = { workspace = true, default-features = true }
+rustix = { workspace = true, features = ["fs"] }

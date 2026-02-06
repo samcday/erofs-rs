@@ -3,7 +3,7 @@ use std::{fs::File, os::unix::fs::PermissionsExt, path::Path};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Local};
 use clap::{Args, Subcommand};
-use erofs_rs::{EroFS, types::Inode};
+use erofs_rs::{types::Inode, EroFS, Image};
 use memmap2::Mmap;
 
 #[derive(Args, Debug)]
@@ -95,7 +95,7 @@ fn format_time(inode: &Inode) -> String {
     }
 }
 
-fn ls(fs: &EroFS, path: &str) -> Result<()> {
+fn ls<I: Image + Clone>(fs: &EroFS<I>, path: &str) -> Result<()> {
     let read_dir = fs
         .read_dir(Path::new(path))
         .with_context(|| format!("failed to read directory: {}", path))?;
@@ -115,7 +115,7 @@ fn ls(fs: &EroFS, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn cat(fs: &EroFS, path: &str) -> Result<()> {
+fn cat<I: Image + Clone>(fs: &EroFS<I>, path: &str) -> Result<()> {
     let mut file = fs
         .open(path)
         .with_context(|| format!("failed to open file: {}", path))?;

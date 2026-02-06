@@ -37,6 +37,27 @@ fn main() -> erofs_rs::Result<()> {
 }
 ```
 
+## no_std + alloc
+
+Disable default features and use the UTF-8 path APIs:
+
+```toml
+erofs-rs = { version = "0.1", default-features = false }
+```
+
+```rust,ignore
+use erofs_rs::EroFS;
+
+// image is a byte slice containing the EROFS image
+# let image: &[u8] = &[];
+let fs = EroFS::from_slice(image)?;
+
+let mut file = fs.open_str("/etc/os-release")?;
+let mut buf = [0u8; 128];
+let n = file.read_into(&mut buf)?;
+# Ok::<(), erofs_rs::Error>(())
+```
+
 ## CLI
 
 ```bash

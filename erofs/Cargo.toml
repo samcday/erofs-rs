@@ -14,10 +14,12 @@ rust-version = "1.88"
 [lints]
 workspace = true
 
+[features]
+default = ["std"]
+std = ["dep:memmap2", "dep:rustix"]
+
 [dependencies]
-bytes = { workspace = true, default-features = true }
-thiserror = { workspace = true }
-binrw = { workspace = true, default-features = true }
 bitflags = { workspace = true }
-memmap2 = { workspace = true, default-features = true }
-rustix = { workspace = true, features = ["fs"] }
+async-trait = "0.1.89"
+memmap2 = { workspace = true, default-features = false, optional = true }
+rustix = { workspace = true, default-features = false, features = ["fs"], optional = true }

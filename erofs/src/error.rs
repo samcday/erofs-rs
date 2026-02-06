@@ -1,39 +1,49 @@
-use thiserror::Error;
+use alloc::string::String;
+use core::fmt;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone)]
 pub enum Error {
-    #[error("invalid super block: {0}")]
     InvalidSuperblock(String),
 
-    #[error("invalid dirent file type: {0}")]
     InvalidDirentFileType(u8),
 
-    #[error("invalid layout: {0}")]
     InvalidLayout(u8),
 
-    #[error("path not found: {0}")]
     PathNotFound(String),
 
-    #[error("not a file: {0}")]
     NotAFile(String),
 
-    #[error("not a directory: {0}")]
     NotADirectory(String),
 
-    #[error("out of bounds: {0}")]
     OutOfBounds(String),
 
-    #[error("binread error: {0}")]
-    BinRead(#[from] binrw::Error),
-
-    #[error("out of range {0} of {1}")]
     OutOfRange(usize, usize),
 
-    #[error("{0} not supported yet")]
     NotSupported(String),
 
-    #[error("corrupted data: {0}")]
     CorruptedData(String),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InvalidSuperblock(msg) => write!(f, "invalid super block: {}", msg),
+            Error::InvalidDirentFileType(val) => {
+                write!(f, "invalid dirent file type: {}", val)
+            }
+            Error::InvalidLayout(val) => write!(f, "invalid layout: {}", val),
+            Error::PathNotFound(path) => write!(f, "path not found: {}", path),
+            Error::NotAFile(msg) => write!(f, "not a file: {}", msg),
+            Error::NotADirectory(msg) => write!(f, "not a directory: {}", msg),
+            Error::OutOfBounds(msg) => write!(f, "out of bounds: {}", msg),
+            Error::OutOfRange(got, max) => write!(f, "out of range {} of {}", got, max),
+            Error::NotSupported(msg) => write!(f, "{} not supported yet", msg),
+            Error::CorruptedData(msg) => write!(f, "corrupted data: {}", msg),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
+pub type Result<T> = core::result::Result<T, Error>;

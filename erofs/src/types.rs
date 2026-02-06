@@ -1,13 +1,40 @@
+use core::mem::size_of;
+
+#[cfg(feature = "std")]
 use std::{
     fs::Permissions,
     os::unix::fs::PermissionsExt,
     time::{Duration, SystemTime},
 };
 
-use binrw::BinRead;
+#[cfg(feature = "std")]
 use rustix::fs::FileType;
 
-use crate::Error;
+use crate::read::ReadCursor;
+use crate::{Error, Result};
+
+#[cfg(not(feature = "std"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileType(u32);
+
+#[cfg(not(feature = "std"))]
+impl FileType {
+    pub fn from_raw_mode(mode: u32) -> Self {
+        Self(mode)
+    }
+
+    pub fn is_dir(&self) -> bool {
+        FileMode::from_bits_truncate(self.0 as u16).is_dir()
+    }
+
+    pub fn is_file(&self) -> bool {
+        FileMode::from_bits_truncate(self.0 as u16).is_file()
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        FileMode::from_bits_truncate(self.0 as u16).contains(FileMode::SYMLINK)
+    }
+}
 
 pub const MAGIC_NUMBER: u32 = 0xe0f5e1e2;
 pub const SUPER_BLOCK_OFFSET: usize = 1024;
@@ -18,8 +45,7 @@ pub const LAYOUT_CHUNK_FORMAT_INDEXES: u16 = 0x0020;
 pub const SB_EXTSLOT_SIZE: usize = 16;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct SuperBlock {
     pub magic: u32,
     pub checksum: u32,
@@ -52,6 +78,36 @@ impl SuperBlock {
     pub const fn size() -> usize {
         size_of::<Self>()
     }
+
+    pub fn read_from(data: &[u8]) -> Result<Self> {
+        let mut cursor = ReadCursor::new(data);
+        Ok(Self {
+            magic: cursor.read_u32_le()?,
+            checksum: cursor.read_u32_le()?,
+            feature_compat: cursor.read_u32_le()?,
+            blk_size_bits: cursor.read_u8()?,
+            ext_slots: cursor.read_u8()?,
+            root_nid: cursor.read_u16_le()?,
+            inos: cursor.read_u64_le()?,
+            build_time: cursor.read_u64_le()?,
+            build_time_ns: cursor.read_u32_le()?,
+            blocks: cursor.read_u32_le()?,
+            meta_blk_addr: cursor.read_u32_le()?,
+            xattr_blk_addr: cursor.read_u32_le()?,
+            uuid: cursor.read_array::<16>()?,
+            volume_name: cursor.read_array::<16>()?,
+            feature_incompat: cursor.read_u32_le()?,
+            compr_algs: cursor.read_u16_le()?,
+            extra_devices: cursor.read_u16_le()?,
+            devt_slot_off: cursor.read_u16_le()?,
+            dir_blk_bits: cursor.read_u8()?,
+            xattr_prefix_count: cursor.read_u8()?,
+            xattr_prefix_start: cursor.read_u32_le()?,
+            packed_nid: cursor.read_u64_le()?,
+            xattr_filter_res: cursor.read_u8()?,
+            reserved: cursor.read_array::<23>()?,
+        })
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,7 +122,7 @@ pub enum Layout {
 
 impl TryFrom<u8> for Layout {
     type Error = Error;
-    fn try_from(x: u8) -> Result<Self, Error> {
+    fn try_from(x: u8) -> Result<Self> {
         use Layout::*;
         match x {
             0 => Ok(FlatPlain),
@@ -140,7 +196,7 @@ impl Inode {
         }
     }
 
-    pub fn layout(&self) -> Result<Layout, Error> {
+    pub fn layout(&self) -> Result<Layout> {
         let format_layout = match self {
             Self::Compact((_, n)) => n.format,
             Self::Extended((_, n)) => n.format,
@@ -203,6 +259,7 @@ impl Inode {
         self.file_type().is_symlink()
     }
 
+    #[cfg(feature = "std")]
     pub fn permissions(&self) -> Permissions {
         match self {
             Self::Compact((_, n)) => Permissions::from_mode(n.mode.into()),
@@ -210,6 +267,15 @@ impl Inode {
         }
     }
 
+    #[cfg(not(feature = "std"))]
+    pub fn permissions(&self) -> u16 {
+        match self {
+            Self::Compact((_, n)) => n.mode,
+            Self::Extended((_, n)) => n.mode,
+        }
+    }
+
+    #[cfg(feature = "std")]
     pub fn modified(&self) -> Option<SystemTime> {
         match self {
             Self::Compact((_, _)) => None,
@@ -222,6 +288,14 @@ impl Inode {
                         + Duration::from_nanos(nanos as u64),
                 )
             }
+        }
+    }
+
+    #[cfg(not(feature = "std"))]
+    pub fn modified(&self) -> Option<(u64, u32)> {
+        match self {
+            Self::Compact((_, _)) => None,
+            Self::Extended((_, n)) => Some((n.mtime, n.mtime_ns)),
         }
     }
 
@@ -241,8 +315,7 @@ impl Inode {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct InodeCompact {
     pub format: u16,
     pub xattr_count: u16,
@@ -262,11 +335,27 @@ impl InodeCompact {
     pub const fn size() -> usize {
         size_of::<Self>()
     }
+
+    pub fn read_from(data: &[u8]) -> Result<Self> {
+        let mut cursor = ReadCursor::new(data);
+        Ok(Self {
+            format: cursor.read_u16_le()?,
+            xattr_count: cursor.read_u16_le()?,
+            mode: cursor.read_u16_le()?,
+            nlink: cursor.read_u16_le()?,
+            size: cursor.read_u32_le()?,
+            reserved: cursor.read_u32_le()?,
+            inode_data: cursor.read_u32_le()?,
+            inode: cursor.read_u32_le()?,
+            uid: cursor.read_u16_le()?,
+            gid: cursor.read_u16_le()?,
+            reserved2: cursor.read_u32_le()?,
+        })
+    }
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct InodeExtended {
     pub format: u16,
     pub xattr_count: u16,
@@ -287,6 +376,25 @@ impl InodeExtended {
     #[inline]
     pub const fn size() -> usize {
         size_of::<Self>()
+    }
+
+    pub fn read_from(data: &[u8]) -> Result<Self> {
+        let mut cursor = ReadCursor::new(data);
+        Ok(Self {
+            format: cursor.read_u16_le()?,
+            xattr_count: cursor.read_u16_le()?,
+            mode: cursor.read_u16_le()?,
+            reserved: cursor.read_u16_le()?,
+            size: cursor.read_u64_le()?,
+            inode_data: cursor.read_u32_le()?,
+            inode: cursor.read_u32_le()?,
+            uid: cursor.read_u32_le()?,
+            gid: cursor.read_u32_le()?,
+            mtime: cursor.read_u64_le()?,
+            mtime_ns: cursor.read_u32_le()?,
+            nlink: cursor.read_u32_le()?,
+            reserved2: cursor.read_array::<16>()?,
+        })
     }
 }
 
@@ -318,7 +426,7 @@ impl DirentFileType {
 
 impl TryFrom<u8> for DirentFileType {
     type Error = Error;
-    fn try_from(x: u8) -> Result<Self, Error> {
+    fn try_from(x: u8) -> Result<Self> {
         use DirentFileType::*;
         match x {
             0 => Ok(Unknown),
@@ -335,8 +443,7 @@ impl TryFrom<u8> for DirentFileType {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, Default, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Dirent {
     pub nid: u64,
     pub name_off: u16,
@@ -348,6 +455,16 @@ impl Dirent {
     #[inline]
     pub const fn size() -> usize {
         size_of::<Self>()
+    }
+
+    pub fn read_from(data: &[u8]) -> Result<Self> {
+        let mut cursor = ReadCursor::new(data);
+        Ok(Self {
+            nid: cursor.read_u64_le()?,
+            name_off: cursor.read_u16_le()?,
+            file_type: cursor.read_u8()?,
+            reserved: cursor.read_u8()?,
+        })
     }
 }
 
@@ -373,8 +490,7 @@ impl ChunkBasedFormat {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct XattrHeader {
     pub name_filter: u32,
     pub shared_count: u8,
@@ -382,8 +498,7 @@ pub struct XattrHeader {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct XattrEntry {
     pub name_len: u8,
     pub name_index: u8,
@@ -391,23 +506,20 @@ pub struct XattrEntry {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct XattrLongPrefixItem {
     pub prefix_addr: u32,
     pub prefix_len: u8,
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct XattrLongPrefix {
     pub base_index: u8,
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, BinRead)]
-#[br(little)]
+#[derive(Debug, Clone, Copy)]
 pub struct MapHeader {
     pub _reserved: u16,
     pub data_size: u16,

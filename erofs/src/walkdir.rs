@@ -1,6 +1,17 @@
+#[cfg(feature = "std")]
 use std::path::Path;
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+
 use crate::dirent::DirEntry;
+use crate::image::Image;
 use crate::{EroFS, dirent::ReadDir};
 use crate::{Error, Result, types::Inode};
 
@@ -8,9 +19,9 @@ use crate::{Error, Result, types::Inode};
 ///
 /// Created by [`EroFS::walk_dir`] or [`EroFS::read_dir`].
 #[derive(Debug)]
-pub struct WalkDir<'a> {
-    erofs: &'a EroFS,
-    dir_stack: Vec<(usize, ReadDir<'a>)>,
+pub struct WalkDir<'a, I: Image + Clone> {
+    erofs: &'a EroFS<I>,
+    dir_stack: Vec<(usize, ReadDir<'a, I>)>,
     max_depth: usize,
 }
 
@@ -24,8 +35,9 @@ pub struct WalkDirEntry {
     pub inode: Inode,
 }
 
-impl<'a> WalkDir<'a> {
-    pub(crate) fn new<P: AsRef<Path>>(erofs: &'a EroFS, root: P) -> Result<Self> {
+#[cfg(feature = "std")]
+impl<'a, I: Image + Clone> WalkDir<'a, I> {
+    pub(crate) fn new<P: AsRef<Path>>(erofs: &'a EroFS<I>, root: P) -> Result<Self> {
         let read_dir = {
             let inode = erofs
                 .get_path_inode(&root)?
@@ -88,7 +100,66 @@ impl<'a> WalkDir<'a> {
     }
 }
 
-impl Iterator for WalkDir<'_> {
+#[cfg(not(feature = "std"))]
+impl<'a, I: Image + Clone> WalkDir<'a, I> {
+    pub(crate) fn new<P: AsRef<str>>(erofs: &'a EroFS<I>, root: P) -> Result<Self> {
+        let read_dir = {
+            let inode = erofs
+                .get_path_inode_str(root.as_ref())?
+                .ok_or_else(|| Error::PathNotFound(root.as_ref().to_string()))?;
+
+            if !inode.file_type().is_dir() {
+                return Err(Error::NotADirectory(root.as_ref().to_string()));
+            }
+
+            ReadDir::new(erofs, inode, root)?
+        };
+        Ok(WalkDir {
+            erofs,
+            dir_stack: vec![(1, read_dir)],
+            max_depth: 0,
+        })
+    }
+
+    pub fn max_depth(mut self, depth: usize) -> Self {
+        self.max_depth = depth;
+        self
+    }
+
+    fn get_walk_dir_entry(&mut self, dir_entry: DirEntry, depth: usize) -> Result<WalkDirEntry> {
+        let inode = self.erofs.get_inode(dir_entry.nid())?;
+
+        if (depth < self.max_depth || self.max_depth == 0) && dir_entry.file_type().is_dir() {
+            let child_dir = ReadDir::new(self.erofs, inode, dir_entry.path())?;
+            self.dir_stack.push((depth + 1, child_dir));
+        }
+
+        Ok(WalkDirEntry {
+            depth,
+            dir_entry,
+            inode,
+        })
+    }
+
+    fn next_entry(&mut self) -> Option<Result<WalkDirEntry>> {
+        loop {
+            let (depth, next_item) = {
+                let (depth, dir) = self.dir_stack.last_mut()?;
+                (*depth, dir.next())
+            };
+
+            match next_item {
+                Some(Ok(entry)) => return Some(self.get_walk_dir_entry(entry, depth)),
+                Some(Err(e)) => return Some(Err(e)),
+                None => {
+                    self.dir_stack.pop();
+                }
+            }
+        }
+    }
+}
+
+impl<I: Image + Clone> Iterator for WalkDir<'_, I> {
     type Item = Result<WalkDirEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {

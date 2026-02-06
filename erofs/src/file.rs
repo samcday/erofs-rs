@@ -1,85 +1,59 @@
-use std::{cmp, io::Read};
+use alloc::vec::Vec;
+use core::cmp;
 
-use bytes::Bytes;
+use crate::image::ReadAt;
+use crate::{EroFS, Result, types::Inode};
 
-use crate::{EroFS, types::Inode};
-
-/// A handle to a file within an EROFS filesystem.
-///
-/// `File` implements [`std::io::Read`], allowing you to read the file's contents
-/// using standard I/O methods like `read`, `read_to_end`, or `read_to_string`.
-///
-/// # Example
-///
-/// ```no_run
-/// use std::io::Read;
-/// use erofs_rs::EroFS;
-/// # use memmap2::Mmap;
-/// # use std::fs::File;
-/// # let file = File::open("image.erofs").unwrap();
-/// # let mmap = unsafe { Mmap::map(&file) }.unwrap();
-/// # let fs = EroFS::new(mmap).unwrap();
-///
-/// let mut file = fs.open("/etc/passwd").unwrap();
-/// let mut content = Vec::new();
-/// file.read_to_end(&mut content).unwrap();
-/// ```
 #[derive(Debug)]
-pub struct File {
+pub struct File<R: ReadAt> {
     inode: Inode,
-    erofs: EroFS,
+    erofs: EroFS<R>,
     offset: usize,
-    buf: Option<Bytes>,
+    cached_block: Option<(usize, Vec<u8>)>,
 }
 
-impl File {
-    pub(crate) fn new(inode: Inode, erofs: EroFS) -> Self {
+impl<R: ReadAt> File<R> {
+    pub(crate) fn new(inode: Inode, erofs: EroFS<R>) -> Self {
         Self {
             inode,
             erofs,
             offset: 0,
-            buf: None,
+            cached_block: None,
         }
     }
 
-    /// Returns the size of the file in bytes.
     pub fn size(&self) -> usize {
         self.inode.data_size()
     }
-}
 
-impl Read for File {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.offset >= self.inode.data_size() {
+    pub async fn read_into(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if self.offset >= self.inode.data_size() || buf.is_empty() {
             return Ok(0);
         }
 
-        if let Some(ref data) = self.buf {
-            let offset = self.offset % self.erofs.block_size();
-            let n = cmp::min(buf.len(), data.len().saturating_sub(offset));
-            buf[..n].copy_from_slice(&data[offset..offset + n]);
-            self.offset += n;
-            return Ok(n);
+        if let Some((block_start, block)) = &self.cached_block {
+            let rel = self.offset.saturating_sub(*block_start);
+            if rel < block.len() {
+                let n = cmp::min(buf.len(), block.len() - rel);
+                buf[..n].copy_from_slice(&block[rel..rel + n]);
+                self.offset += n;
+                if rel + n >= block.len() {
+                    self.cached_block = None;
+                }
+                return Ok(n);
+            }
+            self.cached_block = None;
         }
 
-        let block_size = self.erofs.block_size();
-        let cur_offset = self.offset;
-        let block = self
-            .erofs
-            .get_inode_block(&self.inode, cur_offset)
-            .map_err(|e| std::io::Error::other(format!("read block failed: {}", e)))?;
-        if buf.len() >= block.len() {
-            let n = block.len();
-            buf[..n].copy_from_slice(block);
-            self.offset += n;
-            Ok(n)
-        } else {
-            let offset = cur_offset % block_size;
-            let n = cmp::min(buf.len(), block.len().saturating_sub(offset));
-            buf[..n].copy_from_slice(&block[offset..offset + n]);
-            self.buf = Some(Bytes::copy_from_slice(block));
-            self.offset += n;
-            Ok(n)
+        let block_start = (self.offset / self.erofs.block_size()) * self.erofs.block_size();
+        let block = self.erofs.get_inode_block(&self.inode, self.offset).await?;
+        let rel = self.offset.saturating_sub(block_start);
+        let n = cmp::min(buf.len(), block.len().saturating_sub(rel));
+        buf[..n].copy_from_slice(&block[rel..rel + n]);
+        self.offset += n;
+        if n < block.len().saturating_sub(rel) {
+            self.cached_block = Some((block_start, block));
         }
+        Ok(n)
     }
 }

@@ -44,6 +44,31 @@ pub const LAYOUT_CHUNK_FORMAT_INDEXES: u16 = 0x0020;
 
 pub const SB_EXTSLOT_SIZE: usize = 16;
 
+pub const FEATURE_INCOMPAT_ZERO_PADDING: u32 = 0x00000001;
+
+pub const Z_EROFS_COMPRESSION_LZ4: u8 = 0;
+pub const Z_EROFS_COMPRESSION_LZMA: u8 = 1;
+pub const Z_EROFS_COMPRESSION_DEFLATE: u8 = 2;
+pub const Z_EROFS_COMPRESSION_ZSTD: u8 = 3;
+
+pub const Z_EROFS_ADVISE_COMPACTED_2B: u16 = 0x0001;
+pub const Z_EROFS_ADVISE_EXTENTS: u16 = 0x0001;
+pub const Z_EROFS_ADVISE_BIG_PCLUSTER_1: u16 = 0x0002;
+pub const Z_EROFS_ADVISE_BIG_PCLUSTER_2: u16 = 0x0004;
+pub const Z_EROFS_ADVISE_INLINE_PCLUSTER: u16 = 0x0008;
+pub const Z_EROFS_ADVISE_INTERLACED_PCLUSTER: u16 = 0x0010;
+pub const Z_EROFS_ADVISE_FRAGMENT_PCLUSTER: u16 = 0x0020;
+
+pub const Z_EROFS_FRAGMENT_INODE_BIT: u8 = 7;
+
+pub const Z_EROFS_LCLUSTER_TYPE_PLAIN: u8 = 0;
+pub const Z_EROFS_LCLUSTER_TYPE_HEAD1: u8 = 1;
+pub const Z_EROFS_LCLUSTER_TYPE_NONHEAD: u8 = 2;
+pub const Z_EROFS_LCLUSTER_TYPE_HEAD2: u8 = 3;
+pub const Z_EROFS_LI_LCLUSTER_TYPE_MASK: u16 = 0x0003;
+pub const Z_EROFS_LI_PARTIAL_REF: u16 = 1 << 15;
+pub const Z_EROFS_LI_D0_CBLKCNT: u16 = 1 << 11;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SuperBlock {
@@ -542,5 +567,32 @@ impl MapHeader {
 
     pub fn fragmentoff(&self) -> u32 {
         u32::from_le((self._reserved as u32) << 16 | u32::from(self.data_size))
+    }
+
+    pub fn read_from(data: &[u8]) -> Result<Self> {
+        let mut cursor = ReadCursor::new(data);
+        Ok(Self {
+            _reserved: cursor.read_u16_le()?,
+            data_size: cursor.read_u16_le()?,
+            advise: cursor.read_u16_le()?,
+            algorithmtype: cursor.read_u8()?,
+            clusterbits: cursor.read_u8()?,
+        })
+    }
+
+    pub fn lclusterbits(&self, sb_blk_bits: u8) -> u8 {
+        sb_blk_bits + (self.clusterbits & 0x0F)
+    }
+
+    pub fn packed_inode(&self) -> bool {
+        (self.clusterbits >> Z_EROFS_FRAGMENT_INODE_BIT) != 0
+    }
+
+    pub fn algorithm_head1(&self) -> u8 {
+        self.algorithmtype & 0x0F
+    }
+
+    pub fn algorithm_head2(&self) -> u8 {
+        self.algorithmtype >> 4
     }
 }

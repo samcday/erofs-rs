@@ -1,13 +1,11 @@
 #[cfg(feature = "std")]
 use std::{
-    cmp, format,
+    format,
     io::{Read, Result},
 };
 
 #[cfg(not(feature = "std"))]
 use crate::Result;
-
-use bytes::Bytes;
 
 use super::EroFS;
 use crate::backend::Image;
@@ -43,7 +41,6 @@ pub struct File<'a, I: Image> {
     inode: Inode,
     erofs: &'a EroFS<I>,
     offset: usize,
-    buf: Option<Bytes>,
 }
 
 impl<'a, I: Image> File<'a, I> {
@@ -52,7 +49,6 @@ impl<'a, I: Image> File<'a, I> {
             inode,
             erofs,
             offset: 0,
-            buf: None,
         }
     }
 
@@ -68,21 +64,7 @@ impl<'a, I: Image> Read for File<'a, I> {
             return Ok(0);
         }
 
-        if let Some(ref data) = self.buf {
-            let offset = self.offset % self.erofs.block_size();
-            let data_remaining = data.len().saturating_sub(offset);
-            let n = cmp::min(buf.len(), data_remaining);
-            buf[..n].copy_from_slice(&data[offset..offset + n]);
-            self.offset += n;
-            if n == data_remaining {
-                self.buf = None;
-            }
-            return Ok(n);
-        }
-
-        let block_size = self.erofs.block_size();
-        let cur_offset = self.offset;
-        let block = self.erofs.get_inode_block(&self.inode, cur_offset);
+        let block = self.erofs.read_inode_range(&self.inode, self.offset, buf);
 
         #[cfg(feature = "std")]
         let block =
@@ -90,18 +72,7 @@ impl<'a, I: Image> Read for File<'a, I> {
         #[cfg(not(feature = "std"))]
         let block = block.map_err(|e| e)?;
 
-        if buf.len() >= block.len() {
-            let n = block.len();
-            buf[..n].copy_from_slice(block);
-            self.offset += n;
-            Ok(n)
-        } else {
-            let offset = cur_offset % block_size;
-            let n = cmp::min(buf.len(), block.len().saturating_sub(offset));
-            buf[..n].copy_from_slice(&block[offset..offset + n]);
-            self.buf = Some(Bytes::copy_from_slice(block));
-            self.offset += n;
-            Ok(n)
-        }
+        self.offset += block;
+        Ok(block)
     }
 }

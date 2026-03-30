@@ -1,7 +1,3 @@
-use core::cmp;
-
-use bytes::Bytes;
-
 use super::EroFS;
 use crate::Result;
 use crate::backend::AsyncImage;
@@ -15,7 +11,6 @@ pub struct File<'a, I: AsyncImage> {
     inode: Inode,
     erofs: &'a EroFS<I>,
     offset: usize,
-    buf: Option<Bytes>,
 }
 
 impl<'a, I: AsyncImage> File<'a, I> {
@@ -24,7 +19,6 @@ impl<'a, I: AsyncImage> File<'a, I> {
             inode,
             erofs,
             offset: 0,
-            buf: None,
         }
     }
 
@@ -41,33 +35,11 @@ impl<'a, I: AsyncImage> File<'a, I> {
             return Ok(0);
         }
 
-        if let Some(ref data) = self.buf {
-            let offset = self.offset % self.erofs.block_size();
-            let data_remaining = data.len().saturating_sub(offset);
-            let n = cmp::min(buf.len(), data_remaining);
-            buf[..n].copy_from_slice(&data[offset..offset + n]);
-            self.offset += n;
-            if n == data_remaining {
-                self.buf = None;
-            }
-            return Ok(n);
-        }
-
-        let block_size = self.erofs.block_size();
-        let cur_offset = self.offset;
-        let block = self.erofs.read_inode_block(&self.inode, cur_offset).await?;
-        if buf.len() >= block.len() {
-            let n = block.len();
-            buf[..n].copy_from_slice(&block);
-            self.offset += n;
-            Ok(n)
-        } else {
-            let offset = cur_offset % block_size;
-            let n = cmp::min(buf.len(), block.len().saturating_sub(offset));
-            buf[..n].copy_from_slice(&block[offset..offset + n]);
-            self.buf = Some(Bytes::from(block));
-            self.offset += n;
-            Ok(n)
-        }
+        let n = self
+            .erofs
+            .read_inode_range(&self.inode, self.offset, buf)
+            .await?;
+        self.offset += n;
+        Ok(n)
     }
 }

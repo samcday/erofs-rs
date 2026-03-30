@@ -53,6 +53,8 @@ extern crate std;
 
 pub(crate) mod dirent;
 pub(crate) mod filesystem;
+#[cfg(feature = "compression")]
+pub(crate) mod compression;
 
 pub mod r#async;
 pub mod backend;

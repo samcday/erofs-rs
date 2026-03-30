@@ -25,6 +25,7 @@ std = [
   "typed-path/std",
 ]
 opendal = ["dep:opendal"]
+compression = ["dep:lz4_flex", "dep:miniz_oxide", "dep:spin"]
 
 [dependencies]
 binrw = { workspace = true }
@@ -35,3 +36,6 @@ opendal = { workspace = true, optional = true }
 rustix = { workspace = true, features = ["fs"] }
 thiserror = { workspace = true }
 typed-path = { workspace = true }
+lz4_flex = { version = "0.12", optional = true, default-features = false }
+miniz_oxide = { version = "0.9", optional = true, default-features = false, features = ["with-alloc"] }
+spin = { version = "0.10", optional = true }

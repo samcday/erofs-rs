@@ -1,8 +1,10 @@
 use alloc::{format, string::ToString};
+#[cfg(feature = "compression")]
+use core::convert::TryInto;
 
+use binrw::io::Cursor;
 use binrw::BinRead;
 use binrw::BinReaderExt;
-use binrw::io::Cursor;
 
 use crate::types::*;
 use crate::{Error, Result};
@@ -200,5 +202,62 @@ impl EroFSCore {
 
     pub(crate) fn block_offset(&self, block: u32) -> u64 {
         (block as u64) << self.super_block.blk_size_bits
+    }
+}
+
+#[cfg(feature = "compression")]
+pub(crate) fn align8(x: u64) -> u64 {
+    (x + 7) & !7
+}
+
+#[cfg(feature = "compression")]
+pub(crate) fn decode_compactedbits(lobits: usize, input: &[u8], pos: usize) -> Result<(usize, u8)> {
+    let byte = pos / 8;
+    let bits = pos & 7;
+    let end = byte
+        .checked_add(4)
+        .ok_or_else(|| Error::OutOfBounds("compact bit decode overflow".to_string()))?;
+    let data = input
+        .get(byte..end)
+        .ok_or_else(|| Error::CorruptedData("compact bit decode out of range".to_string()))?;
+    let arr: [u8; 4] = data
+        .try_into()
+        .map_err(|_| Error::CorruptedData("compact bit decode out of range".to_string()))?;
+    let v = u32::from_le_bytes(arr) >> bits;
+    let lo_mask = if lobits >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << lobits) - 1
+    };
+    let lo = (v & lo_mask) as usize;
+    let kind = ((v >> lobits) & 0x3) as u8;
+    Ok((lo, kind))
+}
+
+#[cfg(feature = "compression")]
+pub(crate) fn compacted_lookahead_distance(
+    lobits: usize,
+    encodebits: usize,
+    vcnt: usize,
+    input: &[u8],
+    mut i: usize,
+) -> Result<usize> {
+    if i >= vcnt {
+        return Err(Error::OutOfRange(i, vcnt));
+    }
+    let mut d1 = 0usize;
+    loop {
+        let (lo, kind) = decode_compactedbits(lobits, input, encodebits * i)?;
+        if kind != Z_EROFS_LCLUSTER_TYPE_NONHEAD {
+            return Ok(d1);
+        }
+        d1 += 1;
+        i += 1;
+        if i >= vcnt {
+            if (lo as u16 & Z_EROFS_LI_D0_CBLKCNT) == 0 {
+                d1 += lo.saturating_sub(1);
+            }
+            return Ok(d1);
+        }
     }
 }

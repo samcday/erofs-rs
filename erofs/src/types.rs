@@ -106,20 +106,14 @@ bitflags::bitflags! {
 }
 
 impl FileMode {
+    const TYPE_MASK: u16 = 0o170000;
+
     pub fn is_dir(&self) -> bool {
-        self.contains(Self::DIR)
+        (self.bits() & Self::TYPE_MASK) == Self::DIR.bits()
     }
 
     pub fn is_file(&self) -> bool {
-        !self.intersects(
-            Self::DIR
-                | Self::CHAR_DEVICE
-                | Self::BLOCK_DEVICE
-                | Self::NAMED_PIPE
-                | Self::SOCKET
-                | Self::SYMLINK
-                | Self::IRREGULAR,
-        )
+        (self.bits() & Self::TYPE_MASK) == Self::IRREGULAR.bits()
     }
 }
 
